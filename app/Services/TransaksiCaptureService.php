@@ -14,17 +14,18 @@ class TransaksiCaptureService
      * Load captures from the monthly, direction-specific TCM tables.
      * A row can have both entry and exit timestamps (anti-passback) or only one.
      *
-     * @return array{events: array<int, array{direction: string, time: string, captures: array<int, array{camera: string, src: string}> , message: ?string}>, message: ?string}
+     * @return array{events: array<int, array{direction: string, position: string, time: string, captures: array<int, array{camera: string, src: string}> , message: ?string}>, message: ?string}
      */
     public function forTransaction(Transaksi $transaction): array
     {
         $events = [];
 
         foreach ([
-            ['field' => 'TimeIn', 'direction' => 'Masuk', 'suffix' => 'i', 'cameraColumns' => ['CamIn1', 'CamIn2', 'CamIn3']],
-            ['field' => 'TimeOut', 'direction' => 'Keluar', 'suffix' => 'o', 'cameraColumns' => ['CamOut1', 'CamOut2']],
+            ['field' => 'TimeIn', 'direction' => 'Masuk', 'positionRelation' => 'posIn', 'suffix' => 'i', 'cameraColumns' => ['CamIn1', 'CamIn2', 'CamIn3']],
+            ['field' => 'TimeOut', 'direction' => 'Keluar', 'positionRelation' => 'posOut', 'suffix' => 'o', 'cameraColumns' => ['CamOut1', 'CamOut2']],
         ] as $event) {
             $rawTimestamp = $transaction->getAttribute($event['field']);
+            $position = $transaction->{$event['positionRelation']}?->PosName ?: "Pintu {$event['direction']}";
 
             if (blank($rawTimestamp) || str_starts_with((string) $rawTimestamp, '0000-00-00')) {
                 continue;
@@ -35,6 +36,7 @@ class TransaksiCaptureService
             } catch (Throwable) {
                 $events[] = [
                     'direction' => $event['direction'],
+                    'position' => $position,
                     'time' => (string) $rawTimestamp,
                     'captures' => [],
                     'message' => 'Waktu transaksi tidak dapat dibaca.',
@@ -94,6 +96,7 @@ class TransaksiCaptureService
 
             $events[] = [
                 'direction' => $event['direction'],
+                'position' => $position,
                 'time' => $timestamp->format('d/m/Y H:i:s'),
                 'captures' => $captures,
                 'message' => match (true) {

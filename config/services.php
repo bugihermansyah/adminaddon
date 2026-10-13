@@ -35,4 +35,14 @@ return [
         ],
     ],
 
+    'resident_csv' => [
+        'urls' => array_values(array_filter(array_map(
+            trim(...),
+            explode(',', (string) env('RESIDENT_CSV_URLS', '')),
+        ))),
+        'interval_minutes' => (int) env('RESIDENT_CSV_INTERVAL_MINUTES', 60),
+        'atomicity' => env('RESIDENT_CSV_ATOMICITY', 'per_file'),
+        'max_bytes' => (int) env('RESIDENT_CSV_MAX_BYTES', 25 * 1024 * 1024),
+    ],
+
 ];

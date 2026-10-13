@@ -3,6 +3,7 @@
 namespace App\Filament\Resources\Penghuni\Tables;
 
 use App\Models\Penghuni;
+use Filament\Actions\Action;
 use Filament\Tables\Columns\IconColumn;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\SelectFilter;
@@ -42,7 +43,10 @@ class PenghuniTable
                         1 => 'False',
                     ]),
             ])
-            ->defaultSort('ID', 'desc')
+            ->filtersTriggerAction(fn (Action $action): Action => $action
+                ->button()
+                ->label('Filter'))
+            ->defaultSort('ID', 'asc')
             ->paginated([25, 50, 100])
             ->defaultPaginationPageOption(25);
     }

@@ -140,7 +140,7 @@ class TransaksiTable
                     ->modalWidth(Width::Large)
                     ->modalHeading(fn (Transaksi $record): string => "Capture transaksi #{$record->ID}")
                     ->modalSubmitAction(false)
-                    ->modalCancelActionLabel('Tutup')
+                    ->modalCancelAction(false)
                     ->modalContent(fn (Transaksi $record): View => view(
                         'filament.transaksi.captures',
                         [

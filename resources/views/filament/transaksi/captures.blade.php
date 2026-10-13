@@ -5,8 +5,8 @@
 
     @foreach ($result['events'] as $event)
         <section class="space-y-3">
-            <header class="flex items-center justify-between gap-3 border-b border-gray-200 pb-2 dark:border-white/10">
-                <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ $event['direction'] }}</h3>
+            <header class="space-y-1 border-b border-gray-200 pb-2 dark:border-white/10" style="text-align: center;">
+                <h3 class="text-sm font-bold text-gray-950 dark:text-white" style="font-weight: 700;">{{ $event['position'] ?: $event['direction'] }}</h3>
                 <time class="text-xs text-gray-500 dark:text-gray-400">{{ $event['time'] }}</time>
             </header>
 
@@ -31,5 +31,9 @@
                 </div>
             @endif
         </section>
+
+        @if (! $loop->last)
+            <hr class="border-0 border-t border-white/25">
+        @endif
     @endforeach
 </div>

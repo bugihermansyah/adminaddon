@@ -15,5 +15,6 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         // The local admin account is created by the initial user migration.
+        $this->call(ResidentCsvSettingSeeder::class);
     }
 }

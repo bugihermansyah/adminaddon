@@ -8,11 +8,13 @@ use Filament\Widgets\StatsOverviewWidget\Stat;
 
 class ServerStorageOverview extends BaseWidget
 {
+    protected static ?int $sort = 1;
+
     protected ?string $heading = 'Storage server';
 
     // protected ?string $description = 'Kapasitas filesystem yang menyimpan aplikasi ini.';
 
-    protected ?string $pollingInterval = null;
+    protected ?string $pollingInterval = '30s';
 
     protected function getStats(): array
     {

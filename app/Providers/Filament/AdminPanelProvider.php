@@ -3,6 +3,9 @@
 namespace App\Providers\Filament;
 
 use App\Filament\Pages\Auth\Login;
+use App\Filament\Pages\ResidentCsvSettings;
+use App\Filament\Resources\ResidentCsvSyncRuns\ResidentCsvSyncRunResource;
+use Filament\Actions\Action;
 use Filament\Http\Middleware\Authenticate;
 use Filament\Http\Middleware\AuthenticateSession;
 use Filament\Http\Middleware\DisableBladeIconComponents;
@@ -11,6 +14,7 @@ use Filament\Panel;
 use Filament\PanelProvider;
 use Filament\Support\Colors\Color;
 use Filament\Support\Enums\Width;
+use Filament\Support\Icons\Heroicon;
 use Filament\View\PanelsRenderHook;
 use Filament\Widgets\AccountWidget;
 use Filament\Widgets\FilamentInfoWidget;
@@ -51,6 +55,16 @@ class AdminPanelProvider extends PanelProvider
             ->widgets([
                 // AccountWidget::class,
                 // FilamentInfoWidget::class,
+            ])
+            ->userMenuItems([
+                Action::make('residentCsvSyncLogs')
+                    ->label('Logs')
+                    ->icon(Heroicon::OutlinedClipboardDocumentList)
+                    ->url(fn (): string => ResidentCsvSyncRunResource::getUrl('index')),
+                Action::make('residentCsvSettings')
+                    ->label('Pengaturan')
+                    ->icon(Heroicon::OutlinedAdjustmentsHorizontal)
+                    ->url(fn (): string => ResidentCsvSettings::getUrl()),
             ])
             ->middleware([
                 EncryptCookies::class,
