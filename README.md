@@ -91,10 +91,22 @@ sudo yum install -y https://rpms.remirepo.net/enterprise/remi-release-7.rpm
 sudo yum-config-manager --enable remi-php83
 ```
 
-Pasang PHP-FPM, ekstensi PHP, Nginx, Git, dan Supervisor:
+Pasang Git, Supervisor, dan alat sistem:
 
 ```bash
-sudo yum install -y nginx git unzip curl ca-certificates supervisor firewalld policycoreutils-python \
+sudo yum install -y git unzip curl ca-certificates supervisor firewalld cronie crontabs policycoreutils-python
+```
+
+Pasang Nginx sebagai web server:
+
+```bash
+sudo yum install -y nginx
+```
+
+Pasang PHP-FPM dan ekstensi PHP:
+
+```bash
+sudo yum install -y \
   php php-cli php-fpm php-common php-mysqlnd php-curl php-mbstring php-xml \
   php-zip php-bcmath php-intl php-opcache
 
@@ -120,28 +132,9 @@ rm composer-setup.php
 composer --version
 ```
 
-#### Siapkan aset frontend
+#### Clone source project
 
-Bangun aset di komputer build dengan Node.js 20.19+ atau 22.12+ (contohnya Ubuntu 24.04), karena Vite 8 memerlukan versi tersebut. Dari checkout project yang sama:
-
-```bash
-npm install
-npm run build
-tar -czf adminaddon-build.tar.gz public/build
-scp adminaddon-build.tar.gz USER_SERVER@HOST_SERVER:/tmp/
-```
-
-Setelah menyalin source project ke server seperti di langkah **Pasang aplikasi**, ekstrak hasil build di server:
-
-```bash
-tar -xzf /tmp/adminaddon-build.tar.gz -C /var/www/admin_addon_tamu
-```
-
-#### Pasang aplikasi
-
-Buat database khusus aplikasi mengikuti SQL pada bagian [Siapkan database](#siapkan-database). Atur `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` di `.env`; konfigurasi ini dipakai bersama untuk database aplikasi serta schema legacy `mst_vip`, `trs_vip`, dan `tcm_vip`.
-
-Clone project dan siapkan environment:
+Clone aplikasi dari GitHub ke server:
 
 ```bash
 sudo mkdir -p /var/www
@@ -152,7 +145,28 @@ cd /var/www/admin_addon_tamu
 cp .env.example .env
 ```
 
-Isi `.env` sebelum migrasi. Gunakan schema database aplikasi tersendiri; SQL grant dan database dapat mengikuti bagian [Siapkan database](#siapkan-database).
+#### Siapkan aset frontend
+
+Bangun aset dari commit project yang sama di komputer build dengan Node.js 20.19+ atau 22.12+ (contohnya Ubuntu 24.04), karena Vite 8 memerlukan versi tersebut. Clone repository di komputer build jika belum tersedia:
+
+```bash
+git clone https://github.com/bugihermansyah/adminaddon.git admin_addon_tamu
+cd admin_addon_tamu
+npm install
+npm run build
+tar -czf adminaddon-build.tar.gz public/build
+scp adminaddon-build.tar.gz USER_SERVER@HOST_SERVER:/tmp/
+```
+
+Di server, ekstrak hasil build ke project yang sudah di-clone:
+
+```bash
+tar -xzf /tmp/adminaddon-build.tar.gz -C /var/www/admin_addon_tamu
+```
+
+#### Konfigurasi database dan aplikasi
+
+Buat database khusus aplikasi mengikuti SQL pada bagian [Siapkan database](#siapkan-database). Atur `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` di `.env`; konfigurasi ini dipakai bersama untuk database aplikasi serta schema legacy `mst_vip`, `trs_vip`, dan `tcm_vip`. Isi `.env` sebelum migrasi dan gunakan schema database aplikasi tersendiri.
 
 ```dotenv
 APP_NAME="Admin AddOn"
@@ -197,7 +211,9 @@ Ubah kepemilikan project supaya akun deploy menjadi pemilik dan PHP-FPM dapat me
 
 ```bash
 sudo chown -R "$USER":nginx /var/www/admin_addon_tamu
-sudo chmod -R ug+rwX /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo chgrp -R nginx /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo chmod -R g+rwX /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo find /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache -type d -exec chmod g+s {} \;
 sudo chmod 640 /var/www/admin_addon_tamu/.env
 ```
 
@@ -210,6 +226,16 @@ sudo semanage fcontext -a -t httpd_sys_rw_content_t '/var/www/admin_addon_tamu/b
 sudo restorecon -Rv /var/www/admin_addon_tamu
 sudo setsebool -P httpd_can_network_connect_db 1
 sudo setsebool -P httpd_can_network_connect 1
+```
+
+Jika halaman menampilkan HTTP 500 dan PHP-FPM tidak dapat menulis log/cache, pastikan pool PHP-FPM memakai user dan group `nginx` seperti konfigurasi di bawah. Terapkan ulang izin runtime dan restart PHP-FPM:
+
+```bash
+sudo chgrp -R nginx /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo chmod -R g+rwX /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo find /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache -type d -exec chmod g+s {} \;
+sudo restorecon -Rv /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo systemctl restart php-fpm
 ```
 
 #### Konfigurasi Nginx dan PHP-FPM
@@ -261,11 +287,43 @@ sudo firewall-cmd --reload
 
 Pasang TLS untuk domain lalu ubah `APP_URL` menjadi `https://admin.domain-anda`.
 
-#### Jalankan scheduler dan queue worker
-
-Tambahkan cron sebagai user `nginx`:
+Jika Apache XAMPP harus tetap berjalan, biarkan Apache memakai port 80 dan ubah situs Nginx di `/etc/nginx/conf.d/admin-addon.conf` menjadi `listen 8080;`. Beberapa paket CentOS juga memiliki blok server bawaan yang listen di port 80 langsung di `/etc/nginx/nginx.conf`. Temukan konfigurasi listen yang aktif:
 
 ```bash
+sudo nginx -T | grep -n 'listen '
+```
+
+Jika `nginx.conf` masih memuat blok `server { ... }` dengan `listen 80;` dan `listen [::]:80;`, komentari atau hapus seluruh blok server bawaan tersebut. Biarkan baris `include /etc/nginx/conf.d/*.conf;` tetap aktif agar konfigurasi `admin-addon.conf` dimuat. Kemudian buka port 8080:
+
+```bash
+sudo nginx -t
+sudo systemctl restart nginx
+sudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --reload
+```
+
+Buka aplikasi melalui `http://IP_SERVER:8080`. Jika Apache XAMPP tidak perlu berjalan, alternatifnya hentikan Apache saja dengan `sudo /opt/lampp/lampp stopapache`, lalu gunakan konfigurasi Nginx standar pada port 80. Perintah tersebut tidak menghentikan MySQL XAMPP.
+
+##### Troubleshooting Nginx dan akses jaringan
+
+- `systemctl start nginx` gagal dengan pesan `bind() ...` walau `nginx -t` berhasil: `nginx -t` memeriksa sintaks, bukan ketersediaan port. Cek Apache native, XAMPP, dan proses pemakai port:
+
+  ```bash
+  sudo systemctl status httpd
+  rpm -q httpd
+  sudo /opt/lampp/lampp status
+  sudo ss -ltnp | grep -E ':(80|443|8080)\b'
+  ```
+
+  Cek listener Nginx dengan `sudo nginx -T | grep -n 'listen '`. Pastikan tidak ada konfigurasi Nginx yang tetap bind ke port 80 saat Apache XAMPP memakainya.
+- `http://IP_SERVER:8080` menampilkan `ERR_ADDRESS_UNREACHABLE`: pastikan IP tersebut benar-benar terpasang pada server (`ip -br addr`), Nginx listen di port 8080 (`sudo ss -ltnp | grep ':8080'`), dan respons lokal berhasil (`curl -I http://127.0.0.1:8080/`). Jika firewall aktif, pastikan port 8080 dibuka dengan perintah di atas. Jika tes lokal berhasil tetapi perangkat lain tetap tidak bisa terhubung, pastikan perangkat berada di jaringan atau VPN yang dapat menjangkau IP server.
+
+#### Jalankan scheduler dan queue worker
+
+CentOS memakai user `nginx` untuk PHP-FPM dan cron; `www-data` hanya digunakan pada langkah Ubuntu. Pastikan daemon cron berjalan, lalu tambahkan jadwal sebagai user `nginx`:
+
+```bash
+sudo systemctl enable --now crond
 sudo crontab -u nginx -e
 ```
 
@@ -275,7 +333,20 @@ Tambahkan baris:
 * * * * * cd /var/www/admin_addon_tamu && /usr/bin/php artisan schedule:run >> /dev/null 2>&1
 ```
 
-Buat `/etc/supervisord.d/admin-addon-worker.ini`:
+Khusus CentOS 7, simpan konfigurasi worker di `/etc/supervisord.d/admin-addon-worker.ini` dan gunakan `user=nginx`. Jangan gunakan `/etc/supervisor/conf.d/*.conf`; itu adalah lokasi konfigurasi Supervisor pada Ubuntu. Pastikan `/etc/supervisord.conf` menyertakan `/etc/supervisord.d/*.ini`; jika belum, tambahkan blok berikut:
+
+```ini
+[include]
+files = /etc/supervisord.d/*.ini
+```
+
+Lalu buat file konfigurasi worker:
+
+```bash
+sudo nano /etc/supervisord.d/admin-addon-worker.ini
+```
+
+Isi file:
 
 ```ini
 [program:admin-addon-worker]
@@ -296,6 +367,8 @@ numprocs=1
 Muat worker dan cek service:
 
 ```bash
+sudo mkdir -p /var/log/supervisor
+sudo systemctl enable --now supervisord
 sudo supervisorctl reread
 sudo supervisorctl update
 sudo supervisorctl status
@@ -310,13 +383,19 @@ Jalankan perintah berikut dari akun deploy yang memiliki akses `sudo`.
 
 #### Pasang paket sistem
 
-Ubuntu 24.04 menyediakan PHP 8.3. Perintah ini memasang Nginx, PHP-FPM, Composer, Supervisor dan ekstensi PHP yang diperlukan:
+Ubuntu 24.04 menyediakan PHP 8.3. Pasang Git, Composer, Supervisor, dan ekstensi PHP yang diperlukan:
 
 ```bash
 sudo apt update
-sudo apt install -y nginx git unzip curl ca-certificates composer \
+sudo apt install -y git unzip curl ca-certificates composer \
   php8.3-cli php8.3-fpm php8.3-mysql php8.3-curl php8.3-mbstring \
   php8.3-xml php8.3-zip php8.3-bcmath php8.3-intl php8.3-opcache supervisor
+```
+
+Pasang Nginx sebagai web server:
+
+```bash
+sudo apt install -y nginx
 ```
 
 Vite 8 memerlukan Node.js 20.19+ atau 22.12+. Contoh ini memasang Node.js 24 dari NodeSource; [Ubuntu 24.04 tercantum sebagai platform yang didukung](https://github.com/nodesource/distributions#debian-and-ubuntu-based-distributions).
@@ -334,6 +413,17 @@ npm --version
 ```
 
 Versi tersebut memenuhi [persyaratan Node.js Vite 8](https://vite.dev/blog/announcing-vite8.html).
+
+#### Clone source project
+
+```bash
+sudo mkdir -p /var/www
+sudo chown "$USER":www-data /var/www
+cd /var/www
+git clone https://github.com/bugihermansyah/adminaddon.git admin_addon_tamu
+cd /var/www/admin_addon_tamu
+cp .env.example .env
+```
 
 #### Siapkan database
 
@@ -358,15 +448,6 @@ GRANT SELECT ON tcm_vip.* TO 'admin_addon'@'IP_SERVER_APLIKASI';
 ```
 
 `DB_HOST`, `DB_PORT`, `DB_USERNAME`, dan `DB_PASSWORD` dipakai bersama untuk database aplikasi dan koneksi legacy `mst_vip`, `trs_vip`, serta `tcm_vip`. Semua schema tersebut harus dapat dijangkau dengan host dan akun yang sama.
-
-#### Pasang aplikasi
-
-```bash
-cd /var/www
-git clone https://github.com/bugihermansyah/adminaddon.git admin_addon_tamu
-cd /var/www/admin_addon_tamu
-cp .env.example .env
-```
 
 Edit `.env` sebelum menjalankan migrasi:
 

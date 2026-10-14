@@ -365,8 +365,8 @@ class SyncResidentCsvSource implements ShouldQueue
                     throw new RuntimeException("codebarcode kosong atau terlalu panjang pada {$sourceKey}, baris {$lineNumber}.");
                 }
 
-                if ($name === '' || mb_strlen($name) > 50) {
-                    throw new RuntimeException("Nama kosong atau melebihi 50 karakter pada {$sourceKey}, baris {$lineNumber}.");
+                if ($name === '' || mb_strlen($name) > 255) {
+                    throw new RuntimeException("Nama kosong atau melebihi 255 karakter pada {$sourceKey}, baris {$lineNumber}.");
                 }
 
                 if (! in_array($status, ['0', '1'], true)) {
