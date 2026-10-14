@@ -48,9 +48,261 @@ Panduan ini memasang aplikasi dengan Nginx dan PHP-FPM. Aplikasi membutuhkan PHP
 
 ### CentOS 7
 
-**Jangan gunakan CentOS 7 untuk deployment baru yang terhubung ke internet.** CentOS Linux 7 sudah berakhir masa dukungannya pada 30 Juni 2024. Repository Remi untuk Enterprise Linux 7 juga ditutup; paket PHP 8.3 terakhir yang tercatat adalah 8.3.8 dari Juni 2024, tanpa pembaruan keamanan berikutnya. Aplikasi ini memerlukan PHP 8.3+, jadi paket PHP bawaan CentOS 7 tidak memenuhi kebutuhannya. Lihat pengumuman [CentOS EOL](https://blog.centos.org/2023/04/end-dates-are-coming-for-centos-stream-8-and-centos-linux-7/) dan status [repository Remi EL7](https://rpms.remirepo.net/enterprise/7Server/).
+Langkah berikut memasang PHP 8.3 dari repository Remi, Nginx, Composer 2, Supervisor, dan ekstensi yang digunakan aplikasi. Repository PHP 8.3 EL7 menyediakan paket `8.3.8`; lihat [daftar paket Remi untuk EL7](https://rpms.remirepo.net/enterprise/7/php83/x86_64/repoview/) dan [petunjuk Remi untuk PHP 8.3](https://blog.remirepo.net/post/2023/08/31/PHP-on-the-road-to-the-8.3.0-release).
 
-Jalur yang disarankan adalah memindahkan aplikasi ke Ubuntu 24.04 atau Rocky/AlmaLinux 9, lalu ikuti bagian Ubuntu di bawah dengan menyesuaikan nama paket. Jika CentOS 7 wajib dipertahankan, minta tim platform menyediakan PHP 8.3/8.4 CLI dan FPM yang masih menerima patch keamanan, ekstensi PHP yang dibutuhkan, Composer 2, Node.js yang kompatibel dengan Vite 8, serta Nginx. Setelah itu, ikuti langkah **Pasang aplikasi** dan **Jalankan scheduler dan queue worker** di bawah; jangan mengambil RPM PHP lama dari repository EL7 yang sudah ditutup.
+Jalankan perintah berikut sebagai akun yang memiliki `sudo`.
+
+#### Siapkan repository dan paket
+
+Atur repository CentOS ke snapshot 7.9.2009 di [CentOS Vault](https://vault.centos.org/7.9.2009/):
+
+```bash
+sudo cp -a /etc/yum.repos.d/CentOS-Base.repo /etc/yum.repos.d/CentOS-Base.repo.bak
+sudo tee /etc/yum.repos.d/CentOS-Base.repo >/dev/null <<'REPO'
+[base]
+name=CentOS-7.9.2009 - Base
+baseurl=https://vault.centos.org/7.9.2009/os/$basearch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+
+[updates]
+name=CentOS-7.9.2009 - Updates
+baseurl=https://vault.centos.org/7.9.2009/updates/$basearch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+
+[extras]
+name=CentOS-7.9.2009 - Extras
+baseurl=https://vault.centos.org/7.9.2009/extras/$basearch/
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-CentOS-7
+REPO
+
+sudo yum clean all
+sudo yum makecache
+```
+
+Pasang EPEL, Remi, lalu aktifkan repository PHP 8.3:
+
+```bash
+sudo yum install -y yum-utils \
+  https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/e/epel-release-7-14.noarch.rpm
+sudo yum install -y https://rpms.remirepo.net/enterprise/remi-release-7.rpm
+sudo yum-config-manager --enable remi-php83
+```
+
+Pasang PHP-FPM, ekstensi PHP, Nginx, Git, dan Supervisor:
+
+```bash
+sudo yum install -y nginx git unzip curl ca-certificates supervisor firewalld policycoreutils-python \
+  php php-cli php-fpm php-common php-mysqlnd php-curl php-mbstring php-xml \
+  php-zip php-bcmath php-intl php-opcache
+
+php -v
+php -m | grep -E 'curl|fileinfo|mbstring|mysqli|mysqlnd|PDO|pdo_mysql|xml|zip'
+```
+
+Pasang Composer 2 dari installer resmi:
+
+```bash
+EXPECTED_CHECKSUM="$(php -r 'copy("https://composer.github.io/installer.sig", "php://stdout");')"
+php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+ACTUAL_CHECKSUM="$(php -r 'echo hash_file("sha384", "composer-setup.php");')"
+
+if [ "$EXPECTED_CHECKSUM" != "$ACTUAL_CHECKSUM" ]; then
+  echo 'Composer installer checksum mismatch' >&2
+  rm -f composer-setup.php
+  exit 1
+fi
+
+sudo php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+rm composer-setup.php
+composer --version
+```
+
+#### Siapkan aset frontend
+
+Bangun aset di komputer build dengan Node.js 20.19+ atau 22.12+ (contohnya Ubuntu 24.04), karena Vite 8 memerlukan versi tersebut. Dari checkout project yang sama:
+
+```bash
+npm install
+npm run build
+tar -czf adminaddon-build.tar.gz public/build
+scp adminaddon-build.tar.gz USER_SERVER@HOST_SERVER:/tmp/
+```
+
+Setelah menyalin source project ke server seperti di langkah **Pasang aplikasi**, ekstrak hasil build di server:
+
+```bash
+tar -xzf /tmp/adminaddon-build.tar.gz -C /var/www/admin_addon_tamu
+```
+
+#### Pasang aplikasi
+
+Buat database khusus aplikasi mengikuti SQL pada bagian [Siapkan database](#siapkan-database). Atur `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME`, dan `DB_PASSWORD` di `.env`; konfigurasi ini dipakai bersama untuk database aplikasi serta schema legacy `mst_vip`, `trs_vip`, dan `tcm_vip`.
+
+Clone project dan siapkan environment:
+
+```bash
+sudo mkdir -p /var/www
+sudo chown "$USER":nginx /var/www
+cd /var/www
+git clone https://github.com/bugihermansyah/adminaddon.git admin_addon_tamu
+cd /var/www/admin_addon_tamu
+cp .env.example .env
+```
+
+Isi `.env` sebelum migrasi. Gunakan schema database aplikasi tersendiri; SQL grant dan database dapat mengikuti bagian [Siapkan database](#siapkan-database).
+
+```dotenv
+APP_NAME="Admin AddOn"
+APP_ENV=production
+APP_DEBUG=false
+APP_URL=https://admin.domain-anda
+
+DB_CONNECTION=mysql
+DB_HOST=IP_SERVER_MYSQL
+DB_PORT=3306
+DB_DATABASE=admin_addon_tamu
+DB_USERNAME=admin_addon
+DB_PASSWORD=password-database-yang-kuat
+
+QUEUE_CONNECTION=database
+CACHE_STORE=database
+SESSION_DRIVER=database
+```
+
+Atur `RESIDENT_CSV_URLS`, `RESIDENT_CSV_INTERVAL_MINUTES`, dan `RESIDENT_CSV_ATOMICITY` di `.env` bila ingin memberi nilai awal. Setelah migrasi pertama, pengaturan tersebut dapat dikelola dari menu profil **Pengaturan sinkronisasi CSV**.
+
+```bash
+composer install --no-dev --optimize-autoloader
+php artisan key:generate
+php artisan migrate --force
+php artisan storage:link
+php artisan optimize
+```
+
+Buat akun admin produksi satu kali menggunakan Tinker:
+
+```bash
+php artisan tinker --execute 'App\Models\User::create([
+    "name" => "Administrator",
+    "username" => "admin",
+    "email" => "admin@domain-anda",
+    "password" => "GANTI_DENGAN_PASSWORD_UNIK",
+]);'
+```
+
+Ubah kepemilikan project supaya akun deploy menjadi pemilik dan PHP-FPM dapat menulis ke direktori runtime:
+
+```bash
+sudo chown -R "$USER":nginx /var/www/admin_addon_tamu
+sudo chmod -R ug+rwX /var/www/admin_addon_tamu/storage /var/www/admin_addon_tamu/bootstrap/cache
+sudo chmod 640 /var/www/admin_addon_tamu/.env
+```
+
+Atur SELinux agar Nginx/PHP-FPM dapat membaca source, menulis cache/log, mengakses database dan mengambil CSV melalui HTTPS:
+
+```bash
+sudo semanage fcontext -a -t httpd_sys_content_t '/var/www/admin_addon_tamu(/.*)?'
+sudo semanage fcontext -a -t httpd_sys_rw_content_t '/var/www/admin_addon_tamu/storage(/.*)?'
+sudo semanage fcontext -a -t httpd_sys_rw_content_t '/var/www/admin_addon_tamu/bootstrap/cache(/.*)?'
+sudo restorecon -Rv /var/www/admin_addon_tamu
+sudo setsebool -P httpd_can_network_connect_db 1
+sudo setsebool -P httpd_can_network_connect 1
+```
+
+#### Konfigurasi Nginx dan PHP-FPM
+
+Jalankan PHP-FPM dengan akun `nginx`:
+
+```bash
+sudo sed -i \
+  -e 's/^user = apache/user = nginx/' \
+  -e 's/^group = apache/group = nginx/' \
+  /etc/php-fpm.d/www.conf
+```
+
+Buat `/etc/nginx/conf.d/admin-addon.conf`:
+
+```nginx
+server {
+    listen 80;
+    server_name admin.domain-anda;
+    root /var/www/admin_addon_tamu/public;
+    index index.php;
+    charset utf-8;
+
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+
+    location ~ ^/index\.php(/|$) {
+        fastcgi_pass 127.0.0.1:9000;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_hide_header X-Powered-By;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
+```
+
+Aktifkan service dan buka HTTP pada firewall:
+
+```bash
+sudo nginx -t
+sudo systemctl enable --now php-fpm nginx supervisord firewalld
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --reload
+```
+
+Pasang TLS untuk domain lalu ubah `APP_URL` menjadi `https://admin.domain-anda`.
+
+#### Jalankan scheduler dan queue worker
+
+Tambahkan cron sebagai user `nginx`:
+
+```bash
+sudo crontab -u nginx -e
+```
+
+Tambahkan baris:
+
+```cron
+* * * * * cd /var/www/admin_addon_tamu && /usr/bin/php artisan schedule:run >> /dev/null 2>&1
+```
+
+Buat `/etc/supervisord.d/admin-addon-worker.ini`:
+
+```ini
+[program:admin-addon-worker]
+process_name=%(program_name)s_%(process_num)02d
+directory=/var/www/admin_addon_tamu
+command=/usr/bin/php artisan queue:work database --queue=resident-sync --sleep=3 --tries=3 --timeout=180 --max-time=3600
+user=nginx
+autostart=true
+autorestart=true
+stopasgroup=true
+killasgroup=true
+stopwaitsecs=300
+redirect_stderr=true
+stdout_logfile=/var/log/supervisor/admin-addon-worker.log
+numprocs=1
+```
+
+Muat worker dan cek service:
+
+```bash
+sudo supervisorctl reread
+sudo supervisorctl update
+sudo supervisorctl status
+sudo systemctl status nginx php-fpm supervisord
+```
+
+Tombol **Sinkronkan sekarang** dan scheduler memakai worker ini. Perubahan URL, interval, atau atomicity melalui web tidak memerlukan restart worker.
 
 ### Ubuntu 24.04 LTS
 
