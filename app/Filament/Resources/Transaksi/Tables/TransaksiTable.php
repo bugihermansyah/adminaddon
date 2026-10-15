@@ -86,9 +86,13 @@ class TransaksiTable
                     ])
                     ->query(function (Builder $query, array $data): Builder {
                         foreach ([
-                            'TimeIn' => ['time_in_from', 'time_in_until'],
-                            'TimeOut' => ['time_out_from', 'time_out_until'],
-                        ] as $column => [$fromKey, $untilKey]) {
+                            'TimeIn' => ['time_in_from', 'time_in_until', 'PosInID'],
+                            'TimeOut' => ['time_out_from', 'time_out_until', 'PosOutID'],
+                        ] as $column => [$fromKey, $untilKey, $positionColumn]) {
+                            if (filled($data[$fromKey] ?? null) || filled($data[$untilKey] ?? null)) {
+                                $query->where($positionColumn, '>', 0);
+                            }
+
                             if (filled($data[$fromKey] ?? null)) {
                                 $query->where($column, '>=', Carbon::parse($data[$fromKey])->startOfDay());
                             }

@@ -81,8 +81,15 @@ class ResidentCsvSyncRunResource extends Resource
                     ->numeric(),
                 TextColumn::make('error')
                     ->label('Pesan')
-                    ->limit(100)
-                    ->wrap()
+                    ->formatStateUsing(static function (?string $state): ?string {
+                        if (blank($state)) {
+                            return null;
+                        }
+
+                        return preg_match('/\bstatus code\s+(\d{3})\b/i', $state, $matches) === 1
+                            ? 'HTTP '.$matches[1]
+                            : 'Error';
+                    })
                     ->tooltip(fn (?string $state): ?string => $state),
             ])
             ->filters([

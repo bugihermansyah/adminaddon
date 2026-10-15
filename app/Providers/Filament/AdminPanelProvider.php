@@ -39,6 +39,7 @@ class AdminPanelProvider extends PanelProvider
             ->topNavigation()
             ->globalSearch(false)
             ->maxContentWidth(Width::Full)
+            ->viteTheme('resources/css/filament/admin/theme.css')
             ->renderHook(
                 PanelsRenderHook::GLOBAL_SEARCH_BEFORE,
                 fn (): View => view('filament.components.location-badge', [
