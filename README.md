@@ -398,21 +398,24 @@ Pasang Nginx sebagai web server:
 sudo apt install -y nginx
 ```
 
-Vite 8 memerlukan Node.js 20.19+ atau 22.12+. Contoh ini memasang Node.js 24 dari NodeSource; [Ubuntu 24.04 tercantum sebagai platform yang didukung](https://github.com/nodesource/distributions#debian-and-ubuntu-based-distributions).
+Vite 8 memerlukan Node.js 20.19+ atau 22.12+. Pasang Node.js 24 memakai NVM sebagai akun deploy (tanpa `sudo`) agar versi Node dapat dikelola per akun:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_24.x -o /tmp/nodesource_setup.sh
-sudo -E bash /tmp/nodesource_setup.sh
-sudo apt install -y nodejs
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
+source ~/.bashrc
+
+nvm install 24
+nvm use 24
+nvm alias default 24
 
 php -v
 php -m | grep -E 'curl|fileinfo|mbstring|mysqli|mysqlnd|PDO|pdo_mysql|xml|zip'
 composer --version
-node --version
-npm --version
+node -v
+npm -v
 ```
 
-Versi tersebut memenuhi [persyaratan Node.js Vite 8](https://vite.dev/blog/announcing-vite8.html).
+Versi tersebut memenuhi [persyaratan Node.js Vite 8](https://vite.dev/blog/announcing-vite8.html). Perintah `nvm use 24` memilih Node.js 24 untuk terminal aktif, sedangkan `nvm alias default 24` memilihnya otomatis pada terminal baru. Perintah `source ~/.bashrc` memuat NVM ke terminal saat ini setelah instalasi.
 
 #### Clone source project
 
