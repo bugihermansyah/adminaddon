@@ -145,23 +145,16 @@ cd /var/www/admin_addon_tamu
 cp .env.example .env
 ```
 
-#### Siapkan aset frontend
+#### Aset frontend
 
-Bangun aset dari commit project yang sama di komputer build dengan Node.js 20.19+ atau 22.12+ (contohnya Ubuntu 24.04), karena Vite 8 memerlukan versi tersebut. Clone repository di komputer build jika belum tersedia:
+Aset frontend hasil build disimpan di repository. Setelah `git clone`, direktori `public/build` sudah tersedia dan dapat langsung digunakan Laravel. Server instalasi tidak perlu memasang Node.js/npm atau menjalankan build aset.
+
+Jika mengubah file frontend pada pengembangan berikutnya, build aset di komputer pengembang lalu sertakan hasil `public/build` dalam commit:
 
 ```bash
-git clone https://github.com/bugihermansyah/adminaddon.git admin_addon_tamu
-cd admin_addon_tamu
 npm install
 npm run build
-tar -czf adminaddon-build.tar.gz public/build
-scp adminaddon-build.tar.gz USER_SERVER@HOST_SERVER:/tmp/
-```
-
-Di server, ekstrak hasil build ke project yang sudah di-clone:
-
-```bash
-tar -xzf /tmp/adminaddon-build.tar.gz -C /var/www/admin_addon_tamu
+git add public/build
 ```
 
 #### Konfigurasi database dan aplikasi
@@ -398,24 +391,13 @@ Pasang Nginx sebagai web server:
 sudo apt install -y nginx
 ```
 
-Vite 8 memerlukan Node.js 20.19+ atau 22.12+. Pasang Node.js 24 memakai NVM sebagai akun deploy (tanpa `sudo`) agar versi Node dapat dikelola per akun:
+Periksa PHP dan Composer. Aset frontend sudah tersedia di repository, sehingga Node.js/npm tidak diperlukan pada PC/server instalasi.
 
 ```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
-source ~/.bashrc
-
-nvm install 24
-nvm use 24
-nvm alias default 24
-
 php -v
 php -m | grep -E 'curl|fileinfo|mbstring|mysqli|mysqlnd|PDO|pdo_mysql|xml|zip'
 composer --version
-node -v
-npm -v
 ```
-
-Versi tersebut memenuhi [persyaratan Node.js Vite 8](https://vite.dev/blog/announcing-vite8.html). Perintah `nvm use 24` memilih Node.js 24 untuk terminal aktif, sedangkan `nvm alias default 24` memilihnya otomatis pada terminal baru. Perintah `source ~/.bashrc` memuat NVM ke terminal saat ini setelah instalasi.
 
 #### Clone source project
 
@@ -488,8 +470,6 @@ Pasang dependency dan bangun aset produksi:
 
 ```bash
 composer install --no-dev --optimize-autoloader
-npm install
-npm run build
 php artisan key:generate
 php artisan migrate --force
 php artisan storage:link
