@@ -131,7 +131,9 @@ class TransaksiTable
             ->filtersTriggerAction(fn (Action $action): Action => $action
                 ->button()
                 ->label('Filter'))
-            ->defaultSort('ID', 'desc')
+            ->defaultSort(fn (Builder $query): Builder => $query
+                ->orderByRaw('CASE WHEN TimeIn IS NULL THEN TimeOut WHEN TimeOut IS NULL THEN TimeIn WHEN TimeIn >= TimeOut THEN TimeIn ELSE TimeOut END DESC')
+                ->orderByDesc('ID'))
             ->paginated([25, 50, 100])
             ->defaultPaginationPageOption(25)
             ->recordAction('viewCaptures')
