@@ -35,12 +35,14 @@ class ResidentCsvSyncMonitor extends TableWidget
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         'running' => 'Berjalan',
                         'success' => 'Berhasil',
+                        'partial' => 'Sebagian',
                         'failed' => 'Gagal',
                         default => $state,
                     })
                     ->color(fn (string $state): string => match ($state) {
                         'running' => 'warning',
                         'success' => 'success',
+                        'partial' => 'warning',
                         'failed' => 'danger',
                         default => 'gray',
                     }),
@@ -65,7 +67,7 @@ class ResidentCsvSyncMonitor extends TableWidget
 
                         return preg_match('/\bstatus code\s+(\d{3})\b/i', $state, $matches) === 1
                             ? 'HTTP '.$matches[1]
-                            : 'Error';
+                            : (preg_match('/^Baris dilewati:\s*(\d+)/', $state, $matches) === 1 ? ''.$matches[1].' baris dilewati' : 'Error');
                     })
                     ->tooltip(fn (?string $state): ?string => $state),
             ])

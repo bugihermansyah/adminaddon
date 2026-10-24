@@ -36,6 +36,7 @@ class ResidentCsvSourceMonitor extends TableWidget
                         'queued' => 'Menunggu',
                         'running' => 'Berjalan',
                         'success' => 'Berhasil',
+                        'partial' => 'Sebagian',
                         'failed' => 'Gagal',
                         default => 'Belum berjalan',
                     })
@@ -43,6 +44,7 @@ class ResidentCsvSourceMonitor extends TableWidget
                         'queued' => 'info',
                         'running' => 'warning',
                         'success' => 'success',
+                        'partial' => 'warning',
                         'failed' => 'danger',
                         default => 'gray',
                     }),
@@ -79,7 +81,7 @@ class ResidentCsvSourceMonitor extends TableWidget
 
                         return preg_match('/\bstatus code\s+(\d{3})\b/i', $state, $matches) === 1
                             ? 'HTTP '.$matches[1]
-                            : 'Error';
+                            : (preg_match('/^Baris dilewati:\s*(\d+)/', $state, $matches) === 1 ? ''.$matches[1].' baris dilewati' : 'Error');
                     })
                     ->tooltip(fn (?string $state): ?string => $state),
             ])

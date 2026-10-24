@@ -49,12 +49,14 @@ class ResidentCsvSyncRunResource extends Resource
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         'running' => 'Berjalan',
                         'success' => 'Berhasil',
+                        'partial' => 'Sebagian',
                         'failed' => 'Gagal',
                         default => $state,
                     })
                     ->color(fn (string $state): string => match ($state) {
                         'running' => 'warning',
                         'success' => 'success',
+                        'partial' => 'warning',
                         'failed' => 'danger',
                         default => 'gray',
                     })
@@ -88,7 +90,7 @@ class ResidentCsvSyncRunResource extends Resource
 
                         return preg_match('/\bstatus code\s+(\d{3})\b/i', $state, $matches) === 1
                             ? 'HTTP '.$matches[1]
-                            : 'Error';
+                            : (preg_match('/^Baris dilewati:\s*(\d+)/', $state, $matches) === 1 ? ''.$matches[1].' baris dilewati' : 'Error');
                     })
                     ->tooltip(fn (?string $state): ?string => $state),
             ])
@@ -105,6 +107,7 @@ class ResidentCsvSyncRunResource extends Resource
                     ->options([
                         'running' => 'Berjalan',
                         'success' => 'Berhasil',
+                        'partial' => 'Sebagian',
                         'failed' => 'Gagal',
                     ]),
             ])

@@ -90,26 +90,26 @@ class SyncResidentCsvSource implements ShouldQueue
                 $counts = $countsBySource[$source->getKey()];
 
                 $source->forceFill([
-                    'last_status' => 'success',
+                    'last_status' => $counts['status'],
                     'last_success_at' => now(),
                     'last_rows' => $counts['rows'],
                     'last_added' => $counts['added'],
                     'last_updated' => $counts['updated'],
                     'last_deleted' => $counts['deleted'],
-                    'last_error' => null,
+                    'last_error' => $counts['error'],
                 ])->save();
 
                 ResidentCsvSyncRun::query()
                     ->where('batch_id', $this->batchId)
                     ->where('source_key', $source->source_key)
                     ->update([
-                        'status' => 'success',
+                        'status' => $counts['status'],
                         'finished_at' => now(),
                         'rows' => $counts['rows'],
                         'added' => $counts['added'],
                         'updated' => $counts['updated'],
                         'deleted' => $counts['deleted'],
-                        'error' => null,
+                        'error' => $counts['error'],
                     ]);
             }
         } finally {
@@ -148,12 +148,14 @@ class SyncResidentCsvSource implements ShouldQueue
 
     /**
      * @param  array<int, ResidentCsvSource>  $sources
-     * @return array<int, array{rows: int, added: int, updated: int, deleted: int}>
+     * @return array<int, array{rows: int, added: int, updated: int, deleted: int, status: string, error: ?string}>
      */
     private function synchronize(array $sources): array
     {
         $snapshots = [];
         $incomingOwners = [];
+        $conflicts = [];
+        $rowsBySource = [];
 
         foreach ($sources as $source) {
             $response = Http::accept('text/csv, text/plain, */*')
@@ -176,29 +178,214 @@ class SyncResidentCsvSource implements ShouldQueue
                 throw new RuntimeException("CSV {$source->source_key} tidak memiliki baris data; seluruh cluster tidak diubah.");
             }
 
+            $rowsBySource[$source->getKey()] = count($records);
+
             foreach ($records as $normalizedBarcode => $record) {
                 if (isset($incomingOwners[$normalizedBarcode])) {
-                    throw new RuntimeException('codebarcode yang sama ditemukan di lebih dari satu CSV cluster.');
+                    $owners = $conflicts[$normalizedBarcode]['owners'] ?? [$incomingOwners[$normalizedBarcode]];
+                    $owners[] = $source->source_key;
+                    $conflicts[$normalizedBarcode] = [
+                        'owners' => array_values(array_unique($owners)),
+                        'reason' => 'barcode tercantum di lebih dari satu CSV',
+                    ];
+                } else {
+                    $incomingOwners[$normalizedBarcode] = $source->source_key;
                 }
-
-                $incomingOwners[$normalizedBarcode] = $source->source_key;
             }
 
             $snapshots[$source->getKey()] = $records;
         }
 
-        return $this->reconcile($sources, $snapshots, $incomingOwners);
+        $ownershipConflicts = $this->findOwnershipConflicts($sources, $snapshots, $incomingOwners);
+
+        foreach ($ownershipConflicts as $normalizedBarcode => $ownershipConflict) {
+            if (isset($conflicts[$normalizedBarcode])) {
+                $conflicts[$normalizedBarcode]['owners'] = array_values(array_unique([
+                    ...$conflicts[$normalizedBarcode]['owners'],
+                    ...$ownershipConflict['owners'],
+                ]));
+                $conflicts[$normalizedBarcode]['reason'] .= '; '.$ownershipConflict['reason'];
+            } else {
+                $conflicts[$normalizedBarcode] = $ownershipConflict;
+            }
+        }
+
+        foreach ($conflicts as $normalizedBarcode => $conflict) {
+            unset($incomingOwners[$normalizedBarcode]);
+
+            foreach ($snapshots as &$records) {
+                unset($records[$normalizedBarcode]);
+            }
+            unset($records);
+        }
+
+        $warningsBySource = [];
+
+        foreach ($conflicts as $normalizedBarcode => $conflict) {
+            foreach ($sources as $source) {
+                if (in_array($source->source_key, $conflict['owners'], true)) {
+                    $warningsBySource[$source->getKey()][] = $normalizedBarcode.' ('.$conflict['reason'].')';
+                }
+            }
+        }
+
+        return $this->reconcile($sources, $snapshots, $incomingOwners, $conflicts, $rowsBySource, $warningsBySource);
     }
 
     /**
      * @param  array<int, ResidentCsvSource>  $sources
      * @param  array<int, array<string, array{codebarcode: string, namakaryawan: string, dob: ?string, status: int}>>  $snapshots
      * @param  array<string, string>  $incomingOwners
-     * @return array<int, array{rows: int, added: int, updated: int, deleted: int}>
+     * @return array<string, array{owners: array<int, string>, reason: string}>
      */
-    private function reconcile(array $sources, array $snapshots, array $incomingOwners): array
+    private function findOwnershipConflicts(array $sources, array $snapshots, array $incomingOwners): array
     {
-        return DB::connection('mst_vip')->transaction(function () use ($sources, $snapshots, $incomingOwners): array {
+        $existingOwners = [];
+        $conflicts = [];
+        $ambiguousBarcodes = [];
+        $currentSourceSnapshots = [];
+
+        foreach ($sources as $source) {
+            $currentSourceSnapshots[$source->source_key] = $snapshots[$source->getKey()];
+        }
+
+        foreach (array_chunk(array_keys($incomingOwners), 500) as $barcodeChunk) {
+            $barcodes = [];
+
+            foreach ($barcodeChunk as $normalizedBarcode) {
+                foreach ($snapshots as $records) {
+                    if (isset($records[$normalizedBarcode])) {
+                        $barcodes[] = $records[$normalizedBarcode]['codebarcode'];
+
+                        break;
+                    }
+                }
+            }
+
+            $existingRows = DB::connection('mst_vip')->table('penghuni')
+                ->whereIn('codebarcode', $barcodes)
+                ->get(['codebarcode', 'csv_name']);
+
+            foreach ($existingRows as $existingRow) {
+                $normalizedBarcode = $this->normalizeBarcode((string) $existingRow->codebarcode);
+                $sourceKey = (string) $existingRow->csv_name;
+
+                if (isset($existingOwners[$normalizedBarcode])) {
+                    $ambiguousBarcodes[$normalizedBarcode] = true;
+                    $conflicts[$normalizedBarcode] = [
+                        'owners' => array_values(array_unique([
+                            $incomingOwners[$normalizedBarcode],
+                            $existingOwners[$normalizedBarcode],
+                            $sourceKey,
+                        ])),
+                        'reason' => 'barcode sudah ganda pada data aktif',
+                    ];
+                } else {
+                    $existingOwners[$normalizedBarcode] = $sourceKey;
+                }
+            }
+        }
+
+        $previousSourceKeys = [];
+
+        foreach ($existingOwners as $normalizedBarcode => $previousSourceKey) {
+            if (
+                ! isset($ambiguousBarcodes[$normalizedBarcode])
+                && $previousSourceKey !== $incomingOwners[$normalizedBarcode]
+                && ! isset($currentSourceSnapshots[$previousSourceKey])
+            ) {
+                $previousSourceKeys[$previousSourceKey] = true;
+            }
+        }
+
+        $previousSources = ResidentCsvSource::query()
+            ->whereIn('source_key', array_keys($previousSourceKeys))
+            ->where('is_enabled', true)
+            ->get()
+            ->keyBy('source_key');
+
+        $previousSnapshots = [];
+
+        foreach ($previousSources as $previousSource) {
+            try {
+                $response = Http::accept('text/csv, text/plain, */*')
+                    ->connectTimeout(10)
+                    ->timeout(60)
+                    ->retry(3, 500, throw: false)
+                    ->get($previousSource->url);
+
+                $response->throw();
+                $csv = $response->body();
+                $maximumBytes = (int) config('services.resident_csv.max_bytes', 25 * 1024 * 1024);
+
+                if ($csv === '' || strlen($csv) > $maximumBytes) {
+                    throw new RuntimeException('CSV sumber lama kosong atau melebihi batas ukuran yang diizinkan.');
+                }
+
+                $records = $this->parseCsv($csv, $previousSource->source_key);
+
+                if ($records === []) {
+                    throw new RuntimeException('CSV sumber lama tidak memiliki baris data; perpindahan barcode dibatalkan.');
+                }
+
+                $previousSnapshots[$previousSource->source_key] = $records;
+            } catch (Throwable $exception) {
+                $previousSnapshots[$previousSource->source_key] = null;
+            }
+        }
+
+        foreach ($existingOwners as $normalizedBarcode => $previousSourceKey) {
+            if (isset($ambiguousBarcodes[$normalizedBarcode])) {
+                continue;
+            }
+
+            if ($previousSourceKey === $incomingOwners[$normalizedBarcode]) {
+                continue;
+            }
+
+            if (isset($currentSourceSnapshots[$previousSourceKey])) {
+                if (isset($currentSourceSnapshots[$previousSourceKey][$normalizedBarcode])) {
+                    $conflicts[$normalizedBarcode] = [
+                        'owners' => [$incomingOwners[$normalizedBarcode]],
+                        'reason' => "barcode masih tercatat di {$previousSourceKey}",
+                    ];
+                }
+
+                continue;
+            }
+
+            if (! isset($previousSources[$previousSourceKey])) {
+                continue;
+            }
+
+            if ($previousSnapshots[$previousSourceKey] === null) {
+                $conflicts[$normalizedBarcode] = [
+                    'owners' => [$incomingOwners[$normalizedBarcode]],
+                    'reason' => "CSV sumber lama {$previousSourceKey} tidak dapat diverifikasi",
+                ];
+            } elseif (isset($previousSnapshots[$previousSourceKey][$normalizedBarcode])) {
+                $conflicts[$normalizedBarcode] = [
+                    'owners' => [$incomingOwners[$normalizedBarcode]],
+                    'reason' => "barcode masih tercatat di {$previousSourceKey}",
+                ];
+            }
+        }
+
+        return $conflicts;
+    }
+
+    /**
+     * @param  array<int, ResidentCsvSource>  $sources
+     * @param  array<int, array<string, array{codebarcode: string, namakaryawan: string, dob: ?string, status: int}>>  $snapshots
+     * @param  array<string, string>  $incomingOwners
+     * @param  array<string, array{owners: array<int, string>, reason: string}>  $conflicts
+     * @param  array<int, int>  $rowsBySource
+     * @param  array<int, array<int, string>>  $warningsBySource
+     * @return array<int, array{rows: int, added: int, updated: int, deleted: int, status: string, error: ?string}>
+     */
+    private function reconcile(array $sources, array $snapshots, array $incomingOwners, array $conflicts, array $rowsBySource, array $warningsBySource): array
+    {
+        return DB::connection('mst_vip')->transaction(function () use ($sources, $snapshots, $incomingOwners, $conflicts, $rowsBySource, $warningsBySource): array {
             $connection = DB::connection('mst_vip');
             $currentBySource = [];
 
@@ -220,6 +407,8 @@ class SyncResidentCsvSource implements ShouldQueue
                 }
             }
 
+            $existingByBarcode = [];
+
             foreach (array_chunk(array_keys($incomingOwners), 500) as $barcodeChunk) {
                 $barcodes = [];
 
@@ -238,11 +427,13 @@ class SyncResidentCsvSource implements ShouldQueue
                     ->get(['ID', 'codebarcode', 'csv_name']);
 
                 foreach ($existingRows as $existingRow) {
-                    $incomingOwner = $incomingOwners[$this->normalizeBarcode((string) $existingRow->codebarcode)] ?? null;
+                    $normalizedBarcode = $this->normalizeBarcode((string) $existingRow->codebarcode);
 
-                    if ($incomingOwner !== null && $existingRow->csv_name !== $incomingOwner) {
-                        throw new RuntimeException('codebarcode ditemukan pada sumber CSV lain; seluruh cluster tidak diubah.');
+                    if (isset($existingByBarcode[$normalizedBarcode])) {
+                        throw new RuntimeException('Ditemukan codebarcode ganda pada data aktif; kepemilikan CSV tidak dapat dipindahkan dengan aman.');
                     }
+
+                    $existingByBarcode[$normalizedBarcode] = $existingRow;
                 }
             }
 
@@ -257,6 +448,13 @@ class SyncResidentCsvSource implements ShouldQueue
 
                 foreach ($records as $normalizedBarcode => $record) {
                     $current = $currentRows[$normalizedBarcode] ?? null;
+                    $isMovingFromAnotherSource = $current === null
+                        && isset($existingByBarcode[$normalizedBarcode])
+                        && $existingByBarcode[$normalizedBarcode]->csv_name !== $source->source_key;
+
+                    if ($isMovingFromAnotherSource) {
+                        $current = $existingByBarcode[$normalizedBarcode];
+                    }
 
                     if ($current === null) {
                         $insertRows[] = [
@@ -269,6 +467,10 @@ class SyncResidentCsvSource implements ShouldQueue
                     }
 
                     $changes = [];
+
+                    if ($isMovingFromAnotherSource) {
+                        $changes['csv_name'] = $source->source_key;
+                    }
 
                     foreach (['codebarcode', 'namakaryawan', 'dob', 'status'] as $field) {
                         $currentValue = $current->{$field};
@@ -302,6 +504,16 @@ class SyncResidentCsvSource implements ShouldQueue
 
                 foreach ($currentRows as $normalizedBarcode => $current) {
                     if (! isset($records[$normalizedBarcode])) {
+                        if (isset($conflicts[$normalizedBarcode])) {
+                            continue;
+                        }
+
+                        $incomingOwner = $incomingOwners[$normalizedBarcode] ?? null;
+
+                        if ($incomingOwner !== null && $incomingOwner !== $source->source_key) {
+                            continue;
+                        }
+
                         $deletedIds[] = (int) $current->ID;
                     }
                 }
@@ -314,10 +526,14 @@ class SyncResidentCsvSource implements ShouldQueue
                 }
 
                 $countsBySource[$sourceId] = [
-                    'rows' => count($records),
+                    'rows' => $rowsBySource[$sourceId],
                     'added' => count($insertRows),
                     'updated' => $updated,
                     'deleted' => count($deletedIds),
+                    'status' => isset($warningsBySource[$sourceId]) ? 'partial' : 'success',
+                    'error' => isset($warningsBySource[$sourceId])
+                        ? 'Baris dilewati: '.count($warningsBySource[$sourceId]).'; '.implode(', ', array_slice($warningsBySource[$sourceId], 0, 20))
+                        : null,
                 ];
             }
 
@@ -400,7 +616,7 @@ class SyncResidentCsvSource implements ShouldQueue
 
     private function parseDateOfBirth(string $value, string $sourceKey, int $lineNumber): ?string
     {
-        if ($value === '') {
+        if ($value === '' || mb_strtolower($value) === 'null') {
             return null;
         }
 
